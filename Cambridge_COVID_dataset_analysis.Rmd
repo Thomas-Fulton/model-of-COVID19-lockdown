@@ -1,0 +1,234 @@
+---
+title: "COVID.19 data analysis exercise"
+author: "Thomas Fulton"
+date: "08/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("utils")
+library("ggplot2")
+library("tidyverse")
+library("lubridate")
+```
+
+## R Markdown
+```{r}
+data <- read.csv("https://opendata.ecdc.europa.eu/covid19/casedistribution/csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+```
+
+Download testing data (by week and country)
+#```{r}
+testing_data <- read.csv("https://opendata.ecdc.europa.eu/covid19/testing/csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+
+#```
+
+Download age data
+#```{r}
+age_data <- read.csv("https://opendata.ecdc.europa.eu/covid19/agecasesnational/csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+#```
+
+Download country response measures
+```{r}
+prevention_measures <- read.csv("https://www.ecdc.europa.eu/sites/default/files/documents/response_graphs_data_2021-04-15.csv", na.strings = "NA", fileEncoding = "UTF-8-BOM")
+
+prevention_measures$date_end[is.na(prevention_measures$date_end)] <- "2020-12-14"
+
+```
+
+
+Split the dataset into countries and format date to get just UK data and UK prevention measures
+```{r, echo=FALSE}
+#summary(data)
+
+data$day <- formatC(data$day, width=2, flag="0")
+data$month <- formatC(data$month, width=2, flag="0")
+data$formatted_date <- paste(data$year, data$month, data$day, sep = "-")
+head(data$formatted_date)
+
+
+GeoID_dfs <- split(data, data$geoId)
+UK_data <- data.frame(GeoID_dfs$UK)
+
+
+prevention_measures_by_country <- split(prevention_measures, prevention_measures$Country)
+UK_measures <- prevention_measures_by_country$`United Kingdom`
+
+```
+
+Add column with the Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 from three weeks earlier, the number of people who could have spread it at -21 days affects the current number of infected people. The lag is seen 3 weeks later (Roy and Ghosh, 2020. https://doi.org/10.1371/journal.pone.0241165). EXPLAIN BETTERR
+```{r}
+
+three_weeks_previous_Cumulative_cases <- c(UK_data$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000[22:nrow(UK_data)], rep(0,21))
+UK_data$three_weeks_previous_Cumulative_cases <- three_weeks_previous_Cumulative_cases
+#head(UK_data$three_weeks_previous_Cumulative_cases)
+
+#colnames(UK_data)
+```
+
+Combine UK data and UK prevention measures
+```{r}
+# get list of dates for each prevention measure in UK_measures
+#UK_measures_dates <- list(as.list(1:nrow(UK_measures)))
+
+#nos <- c(1:nrow(UK_measures))
+#for (i in seq_along(nos)){
+#UK_measures_dates[[i]] = as.list(seq(from = as.Date(UK_measures[i,'date_start']), by = "days", to = as.Date(UK_measures[i,'date_end'])))
+#}
+
+
+
+#Measures_names <- list(UK_measures$Response_measure)
+
+for (i in c(1:nrow(UK_measures))) {
+  dates <- as.data.frame(seq(from = as.Date(UK_measures[i,'date_start']), by = "days", to = as.Date(UK_measures[i,'date_end'])))
+  colnames(dates) <- "d"
+  
+  for (r in c(1:nrow(UK_data))){
+    if (UK_data$formatted_date[r] >= min(dates$d) & (UK_data$formatted_date[r] <= max(dates$d))) { 
+      UK_data[r,14+i] <- 1
+    } 
+    else {
+      UK_data[r,14+i] <- 0
+    }
+      
+  }
+    colnames(UK_data)[14+i] = as.character(UK_measures[i,2])
+}
+
+colnames(UK_data) <- make.unique(colnames(UK_data), sep = "_")
+
+```
+
+Combine data from measures that were enforce twice eg. GymsSportsCentres closed from 2020-03-20
+to 2020-05-12, and from 2020-11-05 to 2020-12-01. This is currently in two columns.
+```{r}
+
+measures_split_into_two_columns <- c(7,11,14,24,29,31,33,38,41)  # check. DONE
+
+# Add presence ("1") of measure for the dates from second column to present in first column
+for (i in measures_split_into_two_columns) {
+  print(i)
+  for (r in c(1:nrow(UK_data))) {
+    if (UK_data[r,14+i+1] == 1) {
+      UK_data[r,14+i] <- 1
+    }
+  }
+}
+#& UK_data$formatted_date[r] < max(dates$d))
+```
+
+
+
+```{r}
+ggplot(data = UK_data, aes(x = as.Date(UK_data$formatted_date), scale_x_date(breaks = waiver()), y = UK_data$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000)) +
+  geom_point() 
+#str(g)
+
+```
+
+
+
+```{r}
+ggplot(data = data, aes(x = as.Date(formatted_date), scale_x_date(date_labels = "%b", date_breaks = "1 month"), y = Cumulative_number_for_14_days_of_COVID.19_cases_per_100000, col = countriesAndTerritories)) + 
+  geom_line() +
+  theme(legend.position = "none")
+```
+
+
+Create linear model
+```{r}
+lm_model <- lm(Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 ~ three_weeks_previous_Cumulative_cases + BanOnAllEvents + ClosDaycare + ClosDaycarePartial + ClosPrim + ClosPrimPartial + ClosPubAny + ClosPubAnyPartial + ClosSec + ClosSecPartial + EntertainmentVenues + EntertainmentVenuesPartial + GymsSportsCentres + GymsSportsCentresPartial + HotelsOtherAccommodation + HotelsOtherAccommodationPartial + IndoorOver50 + MasksMandatoryClosedSpaces + MasksVoluntaryClosedSpaces + MassGather50 + MassGatherAll + NonEssentialShops + NonEssentialShopsPartial + OutdoorOver50 + PlaceOfWorship + PrivateGatheringRestrictions + RegionalStayHomeOrder + RestaurantsCafes + RestaurantsCafesPartial + SocialCircle + StayHomeGen + StayHomeOrder + StayHomeOrderPartial + StayHomeRiskG + StayHomeRiskGPartial + Teleworking, data = UK_data)
+
+AIC(lm_model)
+BIC(lm_model)
+anova(lm_model)
+
+lm_model_no_prev3weeks <- lm(Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 ~ BanOnAllEvents + ClosDaycare + ClosDaycarePartial + ClosPrim + ClosPrimPartial + ClosPubAny + ClosPubAnyPartial + ClosSec + ClosSecPartial + EntertainmentVenues + EntertainmentVenuesPartial + GymsSportsCentres + GymsSportsCentresPartial + HotelsOtherAccommodation + HotelsOtherAccommodationPartial + IndoorOver50 + MasksMandatoryClosedSpaces + MasksVoluntaryClosedSpaces + MassGather50 + MassGatherAll + NonEssentialShops + NonEssentialShopsPartial + OutdoorOver50 + PlaceOfWorship + PrivateGatheringRestrictions + RegionalStayHomeOrder + RestaurantsCafes + RestaurantsCafesPartial + SocialCircle + StayHomeGen + StayHomeOrder + StayHomeOrderPartial + StayHomeRiskG + StayHomeRiskGPartial + Teleworking, data = UK_data)
+
+AIC(lm_model_no_prev3weeks)
+BIC(lm_model_no_prev3weeks)
+anova(lm_model_no_prev3weeks)
+
+
+```
+
+Test models
+```{r}
+set.seed(100) 
+trainingRowIndex <- sample(1:nrow(UK_data), 0.8*nrow(UK_data))
+trainingData <- UK_data[trainingRowIndex, ]
+testData  <- UK_data[-trainingRowIndex, ]
+
+lmMod <- lm(Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 ~ BanOnAllEvents + ClosDaycare + ClosDaycarePartial + ClosPrim + ClosPrimPartial + ClosPubAny + ClosPubAnyPartial + ClosSec + ClosSecPartial + EntertainmentVenues + EntertainmentVenuesPartial + GymsSportsCentres + GymsSportsCentresPartial + HotelsOtherAccommodation + HotelsOtherAccommodationPartial + IndoorOver50 + MasksMandatoryClosedSpaces + MasksVoluntaryClosedSpaces + MassGather50 + MassGatherAll + NonEssentialShops + NonEssentialShopsPartial + OutdoorOver50 + PlaceOfWorship + PrivateGatheringRestrictions + RegionalStayHomeOrder + RestaurantsCafes + RestaurantsCafesPartial + SocialCircle + StayHomeGen + StayHomeOrder + StayHomeOrderPartial + StayHomeRiskG + StayHomeRiskGPartial + Teleworking, data=trainingData)
+
+Cumulative_cases_Pred <- predict(lmMod, testData)
+summary(lmMod)
+
+actuals_preds <- data.frame(cbind(actuals=testData$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000, predicteds=Cumulative_cases_Pred))
+actuals_preds[is.na(actuals_preds)] <- 0  # one NA which should have been 0 in 
+
+correlation_accuracy <- cor(actuals_preds)
+
+min_max_accuracy <- mean(apply(actuals_preds, 1, min) / apply(actuals_preds, 1, max))
+mape <- mean(abs((actuals_preds$predicteds - actuals_preds$actuals))/actuals_preds$actuals)  
+
+
+```
+
+
+Check assumptions
+```{r}
+
+mean(lm_model_no_prev3weeks$residuals)  # mean of residuals is roughly equal to 0
+
+plot(lm_model_no_prev3weeks)
+
+acf(lm_model_no_prev3weeks$residuals)
+
+```
+
+Refinement:
+Model selection and testing
+```{r, echo=FALSE}
+selectedMod <- step(lmMod)
+
+Cumulative_cases_Pred <- predict(selectedMod, testData)
+summary(selectedMod)
+
+actuals_preds <- data.frame(cbind(actuals=testData$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000, predicteds=Cumulative_cases_Pred))
+actuals_preds[is.na(actuals_preds)] <- 0  # one NA which should have been 0 in 
+
+correlation_accuracy <- cor(actuals_preds)
+
+min_max_accuracy <- mean(apply(actuals_preds, 1, min) / apply(actuals_preds, 1, max))
+mape <- mean(abs((actuals_preds$predicteds - actuals_preds$actuals))/actuals_preds$actuals)
+
+```
+
+Create generalized linear model?
+
+Include the effect of cumulative no. of cases from 3 weeks ago: no. cumulative cases from 3 weeks earlier as a variable for the lag in effect of prevention measures.
+
+
+Find the discriminatory variables - ie. which prevention measures were enacted at the same time
+
+Plot the dates on top of cumulative cases line graph: shade area under what date each group of prevention measures was implemented.
+
+
+WOE - feature selection / VIF? 
+
+AMOVA /perMANOVA
+
+Linear regression categorical
+
+test variables against no. cases, then maybe no. deaths?
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+
+
+

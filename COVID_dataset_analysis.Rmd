@@ -1,0 +1,349 @@
+---
+title: "COVID.19 data analysis exercise"
+author: "Thomas Fulton"
+date: "08/05/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("utils")
+library("ggplot2")
+library("tidyverse")
+library("lubridate")
+library("data.table")
+library("data.table")
+#library("car")
+```
+
+
+Dear assessor,
+
+Here is the script for my analysis! It should run just fine, although it might be easiest to view by opening in Rstudio as an R markdown script.
+
+Sorry I could not improve the model further and address the assumptions that were not met, or fully interpret and present the data as nicely as I would have liked: merging the datasets was challenging and took most of the available time.
+
+Thank you very much for considering my application, and for your patience!
+Kind regards,
+Thomas
+
+
+```{r}
+data <- read.csv("https://opendata.ecdc.europa.eu/covid19/casedistribution/csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+```
+
+Download country response measures
+```{r}
+prevention_measures <- read.csv("https://www.ecdc.europa.eu/sites/default/files/documents/response_graphs_data_2021-04-15.csv", na.strings = "NA", fileEncoding = "UTF-8-BOM")
+
+prevention_measures$date_end[is.na(prevention_measures$date_end)] <- "2020-12-14"
+
+```
+
+
+Split the dataset into countries and format date to get just UK data and UK prevention measures
+```{r, echo=FALSE}
+#summary(data)
+
+data$day <- formatC(data$day, width=2, flag="0")
+data$month <- formatC(data$month, width=2, flag="0")
+data$formatted_date <- paste(data$year, data$month, data$day, sep = "-")
+head(data$formatted_date)
+
+
+GeoID_dfs <- split(data, data$geoId)
+UK_data <- data.frame(GeoID_dfs$UK)
+
+
+prevention_measures_by_country <- split(prevention_measures, prevention_measures$Country)
+UK_measures <- prevention_measures_by_country$`United Kingdom`
+
+```
+
+Add column with the Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 from three weeks earlier, the number of people who could have spread it at -21 days affects the current number of infected people. The lag is seen roughly 3 weeks later (Roy and Ghosh, 2020. https://doi.org/10.1371/journal.pone.0241165). EXPLAIN BETTERR
+```{r}
+UK_data$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000[is.na(UK_data$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000)] <- 0
+
+three_weeks_previous_Cumulative_cases <- c(UK_data$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000[22:nrow(UK_data)], rep(0,21))
+UK_data$three_weeks_previous_Cumulative_cases <- three_weeks_previous_Cumulative_cases
+#head(UK_data$three_weeks_previous_Cumulative_cases)
+
+
+```
+
+Combine UK data and UK prevention measures
+```{r}
+# get list of dates for each prevention measure in UK_measures
+#UK_measures_dates <- list(as.list(1:nrow(UK_measures)))
+
+#nos <- c(1:nrow(UK_measures))
+#for (i in seq_along(nos)){
+#UK_measures_dates[[i]] = as.list(seq(from = as.Date(UK_measures[i,'date_start']), by = "days", to = as.Date(UK_measures[i,'date_end'])))
+#}
+
+
+
+#Measures_names <- list(UK_measures$Response_measure)
+
+for (i in c(1:nrow(UK_measures))) {
+  dates <- as.data.frame(seq(from = as.Date(UK_measures[i,'date_start']), by = "days", to = as.Date(UK_measures[i,'date_end'])))
+  colnames(dates) <- "d"
+  
+  for (r in c(1:nrow(UK_data))){
+    if (UK_data$formatted_date[r] >= min(dates$d) & (UK_data$formatted_date[r] <= max(dates$d))) { 
+      UK_data[r,14+i] <- 1
+    } 
+    else {
+      UK_data[r,14+i] <- 0
+    }
+      
+  }
+    colnames(UK_data)[14+i] = as.character(UK_measures[i,2])
+}
+
+colnames(UK_data) <- make.unique(colnames(UK_data), sep = "_")
+```
+
+Combine data from measures that were enforce twice eg. GymsSportsCentres closed from 2020-03-20
+to 2020-05-12, and from 2020-11-05 to 2020-12-01. This is currently in two columns.
+```{r}
+
+measures_split_into_two_columns <- c(7,11,14,24,29,31,33,38,41)  # check. DONE
+
+# Add presence ("1") of measure for the dates from second column to present in first column
+for (i in measures_split_into_two_columns) {
+  for (r in c(1:nrow(UK_data))) {
+    if (UK_data[r,14+i+1] == 1) {
+      UK_data[r,14+i] <- 1
+    }
+  }
+}
+redundant_col_no <- 14+measures_split_into_two_columns+1
+UK_data <- UK_data[, -c(redundant_col_no)]
+```
+
+Remove measures that were in force during exactly the same times, so there's no perfectly linear relationship between predictor variables in linear regression.
+```{r}
+
+ncol(UK_data)
+UK_data <- UK_data[!duplicated(as.list(UK_data))]
+ncol(UK_data)
+
+# Get which columns are identical --> duplicated() ?
+
+```
+
+
+
+```{r}
+UK_measures$y <- rep(500,nrow(UK_measures))
+
+ggplot(data = UK_data, aes(x = as.Date(UK_data$formatted_date), scale_x_date(breaks = waiver()), y = UK_data$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Cumulative number for 14 days of COVID.19 cases per 100000") 
+```
+
+
+
+```{r}
+ggplot(data = data, aes(x = as.Date(formatted_date), scale_x_date(date_labels = "%b", date_breaks = "1 month"), y = Cumulative_number_for_14_days_of_COVID.19_cases_per_100000, col = countriesAndTerritories)) + 
+  geom_line() +
+  theme(legend.position = "none")
+```
+
+
+Create linear model
+```{r, results="hide" }
+#predictors <- list()
+#for (i in colnames(UK_data)) {
+#  predictors <- c(predictors, " + ", i)
+#}
+
+#predictors <- paste(unlist(predictors), collapse = "")  # get string of predictors for lm function
+
+lm_model <- lm(Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 ~three_weeks_previous_Cumulative_cases + BanOnAllEvents + ClosDaycare + ClosDaycarePartial + ClosPubAny + ClosPubAnyPartial + ClosSec + ClosSecPartial + EntertainmentVenues + EntertainmentVenuesPartial + GymsSportsCentres + GymsSportsCentresPartial + HotelsOtherAccommodation + HotelsOtherAccommodationPartial + IndoorOver50 + MasksMandatoryClosedSpaces + MasksVoluntaryClosedSpaces + MassGather50 + NonEssentialShops + NonEssentialShopsPartial + OutdoorOver50 + PlaceOfWorship + PrivateGatheringRestrictions + RegionalStayHomeOrder + RestaurantsCafesPartial + SocialCircle + StayHomeGen + StayHomeOrder + StayHomeOrderPartial + StayHomeRiskG + StayHomeRiskGPartial, data = UK_data)
+summary(lm_model)
+AIC(lm_model)
+BIC(lm_model)
+anova(lm_model)
+
+```
+
+```{r}
+plot(lm_model)
+
+```
+
+Create Model exluding_cumulative_previous_3_weeks variable
+```{r}
+
+lm_model_no_prev3weeks <- lm(Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 ~ BanOnAllEvents + ClosDaycare + ClosDaycarePartial + ClosPubAny + ClosPubAnyPartial + ClosSec + ClosSecPartial + EntertainmentVenues + EntertainmentVenuesPartial + GymsSportsCentres + GymsSportsCentresPartial + HotelsOtherAccommodation + HotelsOtherAccommodationPartial + IndoorOver50 + MasksMandatoryClosedSpaces + MasksVoluntaryClosedSpaces + MassGather50 + NonEssentialShops + NonEssentialShopsPartial + OutdoorOver50 + PlaceOfWorship + PrivateGatheringRestrictions + RegionalStayHomeOrder + RestaurantsCafesPartial + SocialCircle + StayHomeGen + StayHomeOrder + StayHomeOrderPartial + StayHomeRiskG + StayHomeRiskGPartial, data = UK_data)
+
+summary(lm_model_no_prev3weeks)
+AIC(lm_model_no_prev3weeks)
+BIC(lm_model_no_prev3weeks)
+anova(lm_model_no_prev3weeks)
+
+
+```
+
+Test models
+```{r}
+set.seed(100) 
+trainingRowIndex <- sample(1:nrow(UK_data), 0.8*nrow(UK_data))
+trainingData <- UK_data[trainingRowIndex, ]
+testData  <- UK_data[-trainingRowIndex, ]
+
+Cumulative_cases_Pred <- predict(lm_model, testData)
+summary(lm_model)
+
+actuals_preds <- data.frame(cbind(actuals=testData$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000, predicteds=Cumulative_cases_Pred))
+actuals_preds[is.na(actuals_preds)] <- 0  # one NA which should have been 0 in 
+
+correlation_accuracy <- cor(actuals_preds)
+
+min_max_accuracy <- mean(apply(actuals_preds, 1, min) / apply(actuals_preds, 1, max))
+mape <- mean(abs((actuals_preds$predicteds - actuals_preds$actuals))/actuals_preds$actuals)  
+
+
+```
+
+
+##Check assumptions
+
+Residuals are roughly normally distributed
+Check mean of residuals is roughly equal to 0
+- mean of residuals is roughly equal to 0
+```{r}
+# 
+mean(lm_model_no_prev3weeks$residuals)  # mean of residuals is roughly equal to 0
+# [1] 1.634789e-15
+```
+
+Check Homoscedasticity (random noise) of residuals or equal variance
+- Residuals vs fitted is approximately flat: homoscedastic, but standardised residuals vs fitted values show slight heteroscedasticicity.
+```{r}
+# Residuals are the difference between the actual observed response values and the response values that the model predicted.
+#par(mfrow=c(2,2))
+plot(lm_model)
+
+```
+
+Check for autocorrelation - should hopefully be accounted for by three_weeks_previous_cumulative_cases variable.
+
+```{r}
+
+acf(lm_model_no_prev3weeks$residuals)
+#runs.test(lm_model2$residuals)
+
+```
+
+Normality of Residues
+- Loosely normally distributed (plot3)
+```{r}
+plot(lm_model)
+```
+
+Refinement of model:
+1. Step wise regression to select factors for a model with lower AIC
+2. Adjust for Multicoliniarity
+```{r, echo=FALSE}
+selectedMod <- step(lm_model)
+anova(selectedMod)  # all
+summary(selectedMod)
+
+```
+step wise regression reduced number of factors to 11 factors. 10 out of 11 are significantly influencial (p<=0.5).  
+
+Test for multicoliniarity (Code from http://r-statistics.co/Model-Selection-in-R.html)
+#```{r}
+all_vifs <- car::vif(selectedMod)
+
+signif_all <- names(all_vifs)
+while(any(all_vifs > 4)){
+  var_with_max_vif <- names(which(all_vifs == max(all_vifs)))  # get the var with max vif
+  signif_all <- signif_all[!(signif_all) %in% var_with_max_vif]  # remove
+  myForm <- as.formula(paste("Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 ~ ", paste (signif_all, collapse=" + "), sep=""))  # new formula
+  selectedMod <- lm(myForm, data=UK_data)  # re-build model with new formula
+  all_vifs <- car::vif(selectedMod)
+}
+summary(selectedMod)
+
+#```
+
+##Assess improved model
+Test models
+```{r}
+set.seed(100) 
+trainingRowIndex <- sample(1:nrow(UK_data), 0.8*nrow(UK_data))
+trainingData <- UK_data[trainingRowIndex, ]
+testData  <- UK_data[-trainingRowIndex, ]
+
+sel_Cumulative_cases_Pred <- predict(selectedMod, testData)
+summary(selectedMod)
+
+sel_actuals_preds <- data.frame(cbind(actuals=testData$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000, predicteds=sel_Cumulative_cases_Pred))
+sel_actuals_preds[is.na(actuals_preds)] <- 0  # one NA which should have been 0 in 
+
+sel_correlation_accuracy <- cor(actuals_preds)
+
+sel_min_max_accuracy <- mean(apply(actuals_preds, 1, min) / apply(actuals_preds, 1, max))
+sel_mape <- mean(abs((actuals_preds$predicteds - actuals_preds$actuals))/actuals_preds$actuals)  
+
+
+```
+
+
+#Check assumptions for improved model
+
+Residuals are roughly normally distributed
+Check mean of residuals is roughly equal to 0
+- mean of residuals is roughly equal to 0
+```{r}
+# 
+mean(selectedMod$residuals)  # mean of residuals is roughly equal to 0
+# [1] 1.634789e-15
+```
+
+Check Homoscedasticity (random noise) of residuals or equal variance
+- Residuals vs fitted is approximately flat: homoscedastic, but standardised residuals vs fitted values show slight heteroscedasticicity.
+```{r}
+# Residuals are the difference between the actual observed response values and the response values that the model predicted.
+#par(mfrow=c(2,2))
+plot(selectedMod)
+
+```
+
+Check for autocorrelation - should hopefully be accounted for by three_weeks_previous_cumulative_cases variable.
+Still autocorrelation - for future could try and improve by introducing a better lag variable by making multiple models with different lags eg. from 1 week-4 weeks and comparing models.
+```{r}
+
+acf(selectedMod$residuals)
+#runs.test(lm_model2$residuals)
+
+```
+
+Normality of Residues
+- Not very normally distributed. 
+```{r}
+plot(lm_model)
+```
+
+
+
+Replace factors with groups of factors names?
+
+
+Plot the dates on top of cumulative cases line graph: shade area under what date each group of prevention measures was implemented.
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+
+
+

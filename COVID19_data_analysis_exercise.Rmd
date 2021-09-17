@@ -1,0 +1,338 @@
+---
+title: "COVID.19 data analysis exercise"
+author: "Thomas Fulton"
+date: "08/05/2021"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("utils")
+library("ggplot2")
+library("tidyverse")
+library("lubridate")
+library("data.table")
+library("data.table")
+#library("car")
+```
+This analysis aims to model the effect of prevention measures taken by the UK on the cumulative number of COVID19 cases over the last 14 days, and determine which prevention measures have been the most effective. This could aid decision on potential measures to include in the case of future lockdowns.  
+
+
+```{r, include=FALSE}
+data <- read.csv("https://opendata.ecdc.europa.eu/covid19/casedistribution/csv", na.strings = "", fileEncoding = "UTF-8-BOM")
+```
+```{r, include=FALSE}
+prevention_measures <- read.csv("https://www.ecdc.europa.eu/sites/default/files/documents/response_graphs_data_2021-04-15.csv", na.strings = "NA", fileEncoding = "UTF-8-BOM")
+```
+```{r, include=FALSE}
+prevention_measures$date_end[is.na(prevention_measures$date_end)] <- "2020-12-14"
+
+``` 
+```{r,include=FALSE}
+#summary(data)
+
+data$day <- formatC(data$day, width=2, flag="0")
+data$month <- formatC(data$month, width=2, flag="0")
+data$formatted_date <- paste(data$year, data$month, data$day, sep = "-")
+head(data$formatted_date)
+
+
+GeoID_dfs <- split(data, data$geoId)
+UK_data <- data.frame(GeoID_dfs$UK)
+
+
+prevention_measures_by_country <- split(prevention_measures, prevention_measures$Country)
+UK_measures <- prevention_measures_by_country$`United Kingdom`
+
+```
+```{r, include=FALSE}
+UK_data$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000[is.na(UK_data$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000)] <- 0
+
+three_weeks_previous_Cumulative_cases <- c(UK_data$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000[22:nrow(UK_data)], rep(0,21))
+UK_data$three_weeks_previous_Cumulative_cases <- three_weeks_previous_Cumulative_cases
+#head(UK_data$three_weeks_previous_Cumulative_cases)
+
+
+```
+```{r, include=FALSE}
+# get list of dates for each prevention measure in UK_measures
+#UK_measures_dates <- list(as.list(1:nrow(UK_measures)))
+
+#nos <- c(1:nrow(UK_measures))
+#for (i in seq_along(nos)){
+#UK_measures_dates[[i]] = as.list(seq(from = as.Date(UK_measures[i,'date_start']), by = "days", to = as.Date(UK_measures[i,'date_end'])))
+#}
+
+
+
+#Measures_names <- list(UK_measures$Response_measure)
+
+for (i in c(1:nrow(UK_measures))) {
+  dates <- as.data.frame(seq(from = as.Date(UK_measures[i,'date_start']), by = "days", to = as.Date(UK_measures[i,'date_end'])))
+  colnames(dates) <- "d"
+  
+  for (r in c(1:nrow(UK_data))){
+    if (UK_data$formatted_date[r] >= min(dates$d) & (UK_data$formatted_date[r] <= max(dates$d))) { 
+      UK_data[r,14+i] <- 1
+    } 
+    else {
+      UK_data[r,14+i] <- 0
+    }
+      
+  }
+    colnames(UK_data)[14+i] = as.character(UK_measures[i,2])
+}
+
+colnames(UK_data) <- make.unique(colnames(UK_data), sep = "_")
+```
+```{r, include=FALSE}
+
+## Combine data from measures that were enforce twice eg. GymsSportsCentres closed from 2020-03-20 to 2020-05-12, and from 2020-11-05 to 2020-12-01. This is currently in two columns.
+
+measures_split_into_two_columns <- c(7,11,14,24,29,31,33,38,41) # check. DONE
+
+# Add presence ("1") of measure for the dates from second column to present in first column
+for (i in measures_split_into_two_columns) {
+  for (r in c(1:nrow(UK_data))) {
+    if (UK_data[r,14+i+1] == 1) {
+      UK_data[r,14+i] <- 1
+    }
+  }
+}
+redundant_col_no <- 14+measures_split_into_two_columns+1
+UK_data <- UK_data[, -c(redundant_col_no)]
+```
+```{r, include=FALSE}
+
+## Remove measures that were in force during exactly the same times, so there's no perfectly linear relationship between predictor variables in linear regression.
+
+
+ncol(UK_data)
+UK_data <- UK_data[!duplicated(as.list(UK_data))]
+ncol(UK_data)
+
+
+```
+UK cumulative cases over 14 days per 100000 people in 2020:
+```{r, echo=FALSE, warning=FALSE}
+UK_measures$y <- rep(500,nrow(UK_measures))
+
+ggplot(data = UK_data, aes(x = as.Date(UK_data$formatted_date), scale_x_date(breaks = waiver()), y = UK_data$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Cumulative number for 14 days of COVID.19 cases per 100000") 
+
+
+```
+```{r, include=FALSE}
+#ggplot(data=UK_measures, aes(x=as.Date(UK_measures$date_start), scale_x_date(breaks = waiver()), y= y)) +
+#  geom_area()
+```
+
+
+```{r, include=FALSE}
+ggplot(data = data, aes(x = as.Date(formatted_date), scale_x_date(date_labels = "%b", date_breaks = "1 month"), y = Cumulative_number_for_14_days_of_COVID.19_cases_per_100000, col = countriesAndTerritories)) + 
+  geom_line() +
+  theme(legend.position = "none")
+```
+
+# Data  
+Two datasets were used: Data on the daily number of new reported COVID-19 cases and deaths by EU/EEA country, and data on country response measures to COVID-19.  
+The datasets were subsetted to get just data for the UK, and combined so that each `Response_measure` was added as a binary variable: either implemented ("1") or not implemented ("0") for every date between 16/03/202 and 15/12/202. An additional lag variable was also included containing the cumulative number of cases over 14 per 100000 people, but 3 weeks prior, for each date. The number of people who could have spread it at 21 days earlier is autocorrelated with the current number of infected people. The lag is seen roughly 3 weeks later (Roy and Ghosh, 2020. https://doi.org/10.1371/journal.pone.0241165).  
+# Linear Regression  
+A linear regression model was calculated from the combined dataset. The assumptions of the model were checked, and it was tested by training it on 80% of the data, then using it to predict the cumulative no. cases over 14 days per 100000 for the other 20% of the data.  
+The model was then improved using a stepwise regression to select factors for a model with lower AIC, retested, and the most influential of the remaining predictive factors were identified with an ANOVA.  
+```{r, include=FALSE}
+#predictors <- list()
+#for (i in colnames(UK_data)) {
+#  predictors <- c(predictors, " + ", i)
+#}
+
+#predictors <- paste(unlist(predictors), collapse = "")  # get string of predictors for lm function
+
+lm_model <- lm(Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 ~three_weeks_previous_Cumulative_cases + BanOnAllEvents + ClosDaycare + ClosDaycarePartial + ClosPubAny + ClosPubAnyPartial + ClosSec + ClosSecPartial + EntertainmentVenues + EntertainmentVenuesPartial + GymsSportsCentres + GymsSportsCentresPartial + HotelsOtherAccommodation + HotelsOtherAccommodationPartial + IndoorOver50 + MasksMandatoryClosedSpaces + MasksVoluntaryClosedSpaces + MassGather50 + NonEssentialShops + NonEssentialShopsPartial + OutdoorOver50 + PlaceOfWorship + PrivateGatheringRestrictions + RegionalStayHomeOrder + RestaurantsCafesPartial + SocialCircle + StayHomeGen + StayHomeOrder + StayHomeOrderPartial + StayHomeRiskG + StayHomeRiskGPartial, data = UK_data)
+summary(lm_model)
+AIC(lm_model)
+BIC(lm_model)
+anova(lm_model)
+
+```
+```{r, include=FALSE}
+plot(lm_model)
+
+```
+```{r, include=FALSE}
+# Create Model exluding_cumulative_previous_3_weeks variable
+lm_model_no_prev3weeks <- lm(Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 ~ BanOnAllEvents + ClosDaycare + ClosDaycarePartial + ClosPubAny + ClosPubAnyPartial + ClosSec + ClosSecPartial + EntertainmentVenues + EntertainmentVenuesPartial + GymsSportsCentres + GymsSportsCentresPartial + HotelsOtherAccommodation + HotelsOtherAccommodationPartial + IndoorOver50 + MasksMandatoryClosedSpaces + MasksVoluntaryClosedSpaces + MassGather50 + NonEssentialShops + NonEssentialShopsPartial + OutdoorOver50 + PlaceOfWorship + PrivateGatheringRestrictions + RegionalStayHomeOrder + RestaurantsCafesPartial + SocialCircle + StayHomeGen + StayHomeOrder + StayHomeOrderPartial + StayHomeRiskG + StayHomeRiskGPartial, data = UK_data)
+
+summary(lm_model_no_prev3weeks)
+AIC(lm_model_no_prev3weeks)
+BIC(lm_model_no_prev3weeks)
+anova(lm_model_no_prev3weeks)
+
+
+```
+```{r, include=FALSE}
+# Test models
+
+set.seed(100) 
+trainingRowIndex <- sample(1:nrow(UK_data), 0.8*nrow(UK_data))
+trainingData <- UK_data[trainingRowIndex, ]
+testData  <- UK_data[-trainingRowIndex, ]
+
+Cumulative_cases_Pred <- predict(lm_model, testData)
+summary(lm_model)
+
+actuals_preds <- data.frame(cbind(actuals=testData$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000, predicteds=Cumulative_cases_Pred))
+actuals_preds[is.na(actuals_preds)] <- 0  # one NA which should have been 0 in 
+
+correlation_accuracy <- cor(actuals_preds)
+
+min_max_accuracy <- mean(apply(actuals_preds, 1, min) / apply(actuals_preds, 1, max))
+mape <- mean(abs((actuals_preds$predicteds - actuals_preds$actuals))/actuals_preds$actuals)  
+
+```
+```{r, include=FALSE}
+# Check assumptions
+
+#Residuals are roughly normally distributed
+#Check mean of residuals is roughly equal to 0
+#- mean of residuals is roughly equal to 0
+
+mean(lm_model_no_prev3weeks$residuals)  # mean of residuals is roughly equal to 0
+# [1] 1.634789e-15
+```
+```{r, include=FALSE}
+#Check Homoscedasticity (random noise) of residuals or equal variance
+#- Residuals vs fitted is approximately flat: homoscedastic, but standardised residuals vs fitted values show slight heteroscedasticicity.
+
+# Residuals are the difference between the actual observed response values and the response values that the model predicted.
+#par(mfrow=c(2,2))
+plot(lm_model)
+
+```
+```{r, include=FALSE}
+# Check for autocorrelation - should hopefully be accounted for by three_weeks_previous_cumulative_cases variable.
+# - Autocorrelation is present
+
+
+acf(lm_model_no_prev3weeks$residuals)
+#runs.test(lm_model2$residuals)
+
+```
+```{r, include=FALSE}
+#Normality of Residues
+#- Loosely normally distributed (plot3)
+
+plot(lm_model)
+```
+```{r, include=FALSE}
+#Refinement of model:
+#1. Step wise regression to select factors for a model with lower AIC
+#2. Adjust for Multicoliniarity
+
+selectedMod <- step(lm_model)
+summary(selectedMod)
+AIC(selectedMod)
+```
+# Results  
+
+The factors were reduced to just 11 factors, 10 of which were highly significant. The cumulative number of cases 3 weeks before ("three_weeks_previous_Cumulative_cases" factor) was the most predicative (F value = 6292), and the most effect Response measures were a Ban on all events, followed by Closing pubs, Paritally closing hotels and other accommodation, and Regional stay at home order.  
+  
+The improved model had a p-value: < 2.2e-16 and AIC value: 3400.142. 
+Not all the assumptions were properly met: there was still autocorrelation - for future could try and improve by introducing a better lag variable by making multiple models with different lags eg. from 1 week-4 weeks and comparing models. Also the residuals were not normally distributed.  
+  
+However, the model was highly predicative: the correlation accuracy of the improved model was 0.976.
+
+
+
+
+```{r}
+anova_sel_lm_model <- anova(selectedMod)
+anova_sel_lm_model
+
+```
+```{r, include=FALSE}
+#step wise regression reduced number of factors to 11 factors. 10 out of 11 are significantly influencial (p<=0.5).  
+#Unfortuanatey did not have time to test:/
+
+#Test for multicoliniarity (Code from http://r-statistics.co/Model-Selection-in-R.html)
+
+all_vifs <- car::vif(selectedMod)
+
+signif_all <- names(all_vifs)
+while(any(all_vifs > 4)){
+  var_with_max_vif <- names(which(all_vifs == max(all_vifs)))  # get the var with max vif
+  signif_all <- signif_all[!(signif_all) %in% var_with_max_vif]  # remove
+  myForm <- as.formula(paste("Cumulative_number_for_14_days_of_COVID.19_cases_per_100000 ~ ", paste (signif_all, collapse=" + "), sep=""))  # new formula
+  selectedMod <- lm(myForm, data=UK_data)  # re-build model with new formula
+  all_vifs <- car::vif(selectedMod)
+}
+summary(selectedMod)
+
+```
+
+##Assess improved model
+#Test model by training it on 80% of the data, then using it to predict the cumulative no. cases over 14 days for the other 20%.
+
+set.seed(100) 
+trainingRowIndex <- sample(1:nrow(UK_data), 0.8*nrow(UK_data))
+trainingData <- UK_data[trainingRowIndex, ]
+testData  <- UK_data[-trainingRowIndex, ]
+
+sel_Cumulative_cases_Pred <- predict(selectedMod, testData)
+summary(selectedMod)
+
+sel_actuals_preds <- data.frame(cbind(actuals=testData$Cumulative_number_for_14_days_of_COVID.19_cases_per_100000, predicteds=sel_Cumulative_cases_Pred))
+sel_actuals_preds[is.na(actuals_preds)] <- 0  # one NA which should have been 0 in 
+
+sel_correlation_accuracy <- cor(actuals_preds)
+
+sel_min_max_accuracy <- mean(apply(actuals_preds, 1, min) / apply(actuals_preds, 1, max))
+sel_mape <- mean(abs((actuals_preds$predicteds - actuals_preds$actuals))/actuals_preds$actuals)  
+
+```
+```{r}
+
+
+```
+```{r, include=FALSE}
+#Check assumptions for improved model
+
+#Residuals are roughly normally distributed
+#Check mean of residuals is roughly equal to 0
+#- mean of residuals is roughly equal to 0
+
+# 
+#mean(selectedMod$residuals)  # mean of residuals is roughly equal to 0
+# [1] 1.634789e-15
+```
+```{r, include=FALSE}
+#Check Homoscedasticity (random noise) of residuals or equal variance
+#- Residuals vs fitted is approximately flat: homoscedastic, but standardised residuals vs fitted values show slight heteroscedasticicity.
+
+# Residuals are the difference between the actual observed response values and the response values that the model predicted.
+#par(mfrow=c(2,2))
+plot(selectedMod)
+
+```
+```{r, include=FALSE}
+
+acf(selectedMod$residuals)
+#runs.test(lm_model2$residuals)
+
+```
+
+```{r, include=FALSE}
+plot(lm_model)
+```
+
+
+
+
+
+
+

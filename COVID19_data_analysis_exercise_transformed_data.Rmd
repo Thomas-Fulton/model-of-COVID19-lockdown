@@ -1,0 +1,221 @@
+---
+title: "transformed_COVID_data_analysis"
+author: "Thomas Fulton"
+date: "27/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+
+
+### Create linear model
+```{r, results="hide" }
+#predictors <- list()
+#for (i in colnames(UK_data)) {
+#  predictors <- c(predictors, " + ", i)
+#}
+
+#predictors <- paste(unlist(predictors), collapse = "")  # get string of predictors for lm function
+
+lm_model <- lm(root_cumul_cases ~root_prev_cumul_cases + BanOnAllEvents + ClosDaycare + ClosDaycarePartial + ClosPubAny + ClosPubAnyPartial + ClosSec + ClosSecPartial + EntertainmentVenues + EntertainmentVenuesPartial + GymsSportsCentres + GymsSportsCentresPartial + HotelsOtherAccommodation + HotelsOtherAccommodationPartial + IndoorOver50 + MasksMandatoryClosedSpaces + MasksVoluntaryClosedSpaces + MassGather50 + NonEssentialShops + NonEssentialShopsPartial + OutdoorOver50 + PlaceOfWorship + PrivateGatheringRestrictions + RegionalStayHomeOrder + RestaurantsCafesPartial + SocialCircle + StayHomeGen + StayHomeOrder + StayHomeOrderPartial + StayHomeRiskG + StayHomeRiskGPartial, data = UK_data)
+summary(lm_model)
+AIC(lm_model)
+BIC(lm_model)
+anova(lm_model)
+
+```
+
+```{r}
+plot(lm_model)
+
+```
+
+Create Model exluding_cumulative_previous_3_weeks variable
+```{r}
+
+lm_model_no_prev3weeks <- lm(root_cumul_cases ~ BanOnAllEvents + ClosDaycare + ClosDaycarePartial + ClosPubAny + ClosPubAnyPartial + ClosSec + ClosSecPartial + EntertainmentVenues + EntertainmentVenuesPartial + GymsSportsCentres + GymsSportsCentresPartial + HotelsOtherAccommodation + HotelsOtherAccommodationPartial + IndoorOver50 + MasksMandatoryClosedSpaces + MasksVoluntaryClosedSpaces + MassGather50 + NonEssentialShops + NonEssentialShopsPartial + OutdoorOver50 + PlaceOfWorship + PrivateGatheringRestrictions + RegionalStayHomeOrder + RestaurantsCafesPartial + SocialCircle + StayHomeGen + StayHomeOrder + StayHomeOrderPartial + StayHomeRiskG + StayHomeRiskGPartial, data = UK_data)
+
+summary(lm_model_no_prev3weeks)
+AIC(lm_model_no_prev3weeks)
+BIC(lm_model_no_prev3weeks)
+anova(lm_model_no_prev3weeks)
+
+
+```
+
+Test models
+```{r}
+set.seed(100) 
+trainingRowIndex <- sample(1:nrow(UK_data), 0.8*nrow(UK_data))
+trainingData <- UK_data[trainingRowIndex, ]
+testData  <- UK_data[-trainingRowIndex, ]
+
+Cumulative_cases_Pred <- predict(lm_model, testData)
+#summary(lm_model_no_prev3weeks)
+
+actuals_preds <- data.frame(cbind(actuals=testData$root_cumul_cases, predicteds=Cumulative_cases_Pred))
+actuals_preds[is.na(actuals_preds)] <- 0  # one NA which should have been 0 in 
+
+correlation_accuracy <- cor(actuals_preds)
+
+min_max_accuracy <- mean(apply(actuals_preds, 1, min) / apply(actuals_preds, 1, max))
+mape <- mean(abs((actuals_preds$predicteds - actuals_preds$actuals))/actuals_preds$actuals)  
+
+
+```
+
+
+##Check assumptions
+
+Residuals are roughly normally distributed
+Check mean of residuals is roughly equal to 0
+- mean of residuals is roughly equal to 0
+```{r}
+# 
+mean(lm_model_no_prev3weeks$residuals)  # mean of residuals is roughly equal to 0
+# [1] 1.634789e-15
+```
+
+Check Homoscedasticity (random noise) of residuals or equal variance
+- Residuals vs fitted is approximately flat: homoscedastic, but standardised residuals vs fitted values show slight heteroscedasticicity.
+```{r}
+# Residuals are the difference between the actual observed response values and the response values that the model predicted.
+#par(mfrow=c(2,2))
+plot(lm_model)
+
+```
+
+Check for autocorrelation - should hopefully be accounted for by root_prev_cumul_cases variable.
+
+```{r}
+
+acf(lm_model_no_prev3weeks$residuals)
+#runs.test(lm_model2$residuals)
+
+```
+
+Normality of Residues
+- Loosely normally distributed (plot3)
+```{r}
+plot(lm_model)
+```
+
+
+
+## Refinement of model:
+1. Step wise regression to select factors for a model with lower AIC
+2. Adjust for Multicoliniarity
+```{r, echo=FALSE, results="hide"}
+selectedMod <- step(lm_model)
+anova(selectedMod)  # all
+summary(selectedMod)
+
+```
+step wise regression reduced number of factors to 11 factors. 10 out of 11 are significantly influencial (p<=0.5).  
+
+Test for multicoliniarity (Code from http://r-statistics.co/Model-Selection-in-R.html)
+
+```{r}
+#step wise regression reduced number of factors to 11 factors. 10 out of 11 are significantly influencial (p<=0.5).  
+#Unfortuanatey did not have time to test:/
+
+#Test for multicoliniarity (Code from http://r-statistics.co/Model-Selection-in-R.html)
+
+all_vifs <- car::vif(selectedMod)
+
+signif_all <- names(all_vifs)
+while(any(all_vifs > 4)){
+  var_with_max_vif <- names(which(all_vifs == max(all_vifs)))  # get the var with max vif
+  signif_all <- signif_all[!(signif_all) %in% var_with_max_vif]  # remove
+  myForm <- as.formula(paste("root_cumul_cases ~ ", paste (signif_all, collapse=" + "), sep=""))  # new formula
+  selectedMod <- lm(myForm, data=UK_data)  # re-build model with new formula
+  all_vifs <- car::vif(selectedMod)
+}
+summary(selectedMod)
+Anova_selected_Mod <- anova(selectedMod)
+Anova_selected_Mod
+write.csv(Anova_selected_Mod, "~/Downloads/Anova_selected_Mod.csv")
+```
+
+## Assess improved model
+Test models
+```{r}
+set.seed(100) 
+trainingRowIndex <- sample(1:nrow(UK_data), 0.8*nrow(UK_data))
+trainingData <- UK_data[trainingRowIndex, ]
+testData  <- UK_data[-trainingRowIndex, ]
+
+sel_Cumulative_cases_Pred <- predict(selectedMod, testData)
+summary(selectedMod)
+
+sel_actuals_preds <- data.frame(cbind(actuals=testData$root_cumul_cases, predicteds=sel_Cumulative_cases_Pred))
+sel_actuals_preds[is.na(actuals_preds)] <- 0  # one NA which should have been 0 in 
+
+sel_correlation_accuracy <- cor(actuals_preds)
+sel_correlation_accuracy
+sel_min_max_accuracy <- mean(apply(actuals_preds, 1, min) / apply(actuals_preds, 1, max))
+sel_mape <- mean(abs((actuals_preds$predicteds - actuals_preds$actuals))/actuals_preds$actuals)  
+
+
+```
+
+
+#Check assumptions for improved model
+
+Residuals are roughly normally distributed
+Check mean of residuals is roughly equal to 0
+- mean of residuals is roughly equal to 0
+```{r}
+# 
+mean(selectedMod$residuals)  # mean of residuals is roughly equal to 0
+# [1] 1.634789e-15
+```
+
+Check Homoscedasticity (random noise) of residuals or equal variance
+- Residuals vs fitted is approximately flat: homoscedastic, but standardised residuals vs fitted values show slight heteroscedasticicity.
+```{r}
+# Residuals are the difference between the actual observed response values and the response values that the model predicted.
+#par(mfrow=c(2,2))
+plot(selectedMod)
+summary(selectedMod)
+```
+
+Check for autocorrelation - should hopefully be accounted for by root_prev_cumul_cases variable.
+Still autocorrelation - for future could try and improve by introducing a better lag variable by making multiple models with different lags eg. from 1 week-4 weeks and comparing models.
+```{r}
+
+acf(selectedMod$residuals)
+#runs.test(lm_model2$residuals)
+
+```
+
+Normality of Residues
+- Not very normally distributed. 
+```{r}
+plot(lm_model)
+summary(selectedMod)
+AIC(selectedMod)
+```
+
+
+MARS method for variable importance based on Generalized cross validation (GCV), number of subset models the variable occurs (nsubsets) and residual sum of squares (RSS).
+```{r}
+regressor <- earth(root_cumul_cases ~ root_prev_cumul_cases, ClosDaycarePartial, ClosPubAnyPartial, EntertainmentVenuesPartial, MasksVoluntaryClosedSpaces, NonEssentialShops, PlaceOfWorship, RegionalStayHomeOrder, SocialCircle, data=UK_data) # build model
+
+ev <- evimp(selectedMod) # estimate variable importance
+
+plot (ev)
+
+
+
+
+```
+
+
+
